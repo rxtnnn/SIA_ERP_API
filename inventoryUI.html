@@ -136,9 +136,14 @@
                 <div id="products-section" style="display: none;">
                     <div class="d-flex justify-content-between align-items-center mb-4">
                         <h2>Products</h2>
-                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
-                            <i class="fas fa-plus"></i> Add Product
-                        </button>
+                        <div>
+                            <button class="btn btn-outline-primary me-2" id="add-category-btn">
+                                <i class="fas fa-folder-plus"></i> Add Category
+                            </button>
+                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
+                                <i class="fas fa-plus"></i> Add Product
+                            </button>
+                        </div>
                     </div>
                     
                     <div class="card">
@@ -413,4 +418,116 @@
         </div>
     </div>
 
-    
+    <!-- Add Category Modal -->
+    <div class="modal fade" id="addCategoryModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add New Category</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="add-category-form">
+                        <div class="mb-3">
+                            <label for="category-name" class="form-label">Category Name</label>
+                            <input type="text" class="form-control" id="category-name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="parent-category" class="form-label">Parent Category (Optional)</label>
+                            <select class="form-select" id="parent-category">
+                                <option value="">None (Top Level)</option>
+                                <!-- Categories will be loaded from API -->
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="save-category-btn">Save Category</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Direct category check -->
+    <script>
+    // Run this right away when the page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log("Running direct category check...");
+        
+        // Make direct fetch request to API
+        fetch('api/categories.php')
+            .then(response => response.json())
+            .then(data => {
+                console.log("Categories API direct response:", data);
+                
+                if (data.success && data.data && data.data.categories) {
+                    const categories = data.data.categories;
+                    console.log("Found " + categories.length + " categories");
+                    
+                    // Check if your test category appears
+                    categories.forEach(cat => {
+                        console.log("Category:", cat.id, cat.name);
+                    });
+                    
+                    // Try to directly update the dropdown
+                    const dropdown = document.getElementById('product-category');
+                    if (dropdown) {
+                        console.log("Found product-category dropdown, current HTML:", dropdown.innerHTML);
+                        
+                        // Update it directly
+                        let html = '<option value="">Select Category</option>';
+                        categories.forEach(cat => {
+                            html += `<option value="${cat.id}">${cat.name}</option>`;
+                        });
+                        dropdown.innerHTML = html;
+                        
+                        console.log("Updated dropdown with categories, new HTML:", dropdown.innerHTML);
+                    } else {
+                        console.error("Could not find product-category dropdown!");
+                    }
+                } else {
+                    console.error("No categories found in API response:", data);
+                }
+            })
+            .catch(error => {
+                console.error("Error fetching categories:", error);
+            });
+            
+        // Also directly check the Add Product button
+        const addProductBtn = document.querySelector('[data-bs-toggle="modal"][data-bs-target="#addProductModal"]');
+        if (addProductBtn) {
+            console.log("Found Add Product button");
+            
+            // Add a click listener to the button that loads categories right before showing modal
+            addProductBtn.addEventListener('click', function() {
+                console.log("Add Product button clicked directly in DOM listener");
+                
+                // Fetch categories directly
+                fetch('api/categories.php')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.data && data.data.categories) {
+                            const categories = data.data.categories;
+                            console.log("Categories before modal:", categories);
+                            
+                            // Direct update of product-category
+                            const dropdown = document.getElementById('product-category');
+                            if (dropdown) {
+                                let html = '<option value="">Select Category</option>';
+                                categories.forEach(cat => {
+                                    html += `<option value="${cat.id}">${cat.name}</option>`;
+                                });
+                                dropdown.innerHTML = html;
+                                console.log("Updated dropdown from button click handler");
+                            }
+                        }
+                    });
+            });
+        } else {
+            console.error("Could not find Add Product button!");
+        }
+    });
+    </script>
+</body>
+</html>
