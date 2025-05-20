@@ -525,10 +525,9 @@ function saveProduct() {
         price: $('#product-price').val(),
         cost: $('#product-cost').val(),
         initial_stock: $('#initial-stock').val(),
-        min_stock: $('#min-stock').val(),
-        description: $('#product-description').val()
+        description: $('#product-description').val(),
+        track_inventory: $('#track-inventory').is(':checked')
     };
-    
     // Validate form
     if (!product.name || !product.category_id || !product.price || !product.cost) {
         alert('Please fill in all required fields');

@@ -95,11 +95,11 @@ function handleGetProducts($odoo) {
             return;
         }
         
-        // Get product details
+        // Get product details with qty_available field to get accurate stock numbers
         $products = $odoo->read(
             'product.product',
             $productIds,
-            ['id', 'name', 'categ_id', 'list_price', 'standard_price']
+            ['id', 'name', 'categ_id', 'list_price', 'standard_price', 'qty_available']
         );
         
         if ($products === false) {
@@ -135,8 +135,8 @@ function handleGetProducts($odoo) {
         foreach ($products as $index => $product) {
             error_log("Processing product: " . json_encode($product));
             
-            // For demo purposes, generate stock values
-            $stock = ($index + 1) * 5; // Different stock value for each product
+            // Get actual stock from Odoo instead of generating it
+            $stock = isset($product['qty_available']) ? $product['qty_available'] : 0;
             $minStock = 5; // Default min stock
             
             $categoryName = 'N/A';
@@ -207,15 +207,19 @@ function handleCreateProduct($odoo) {
             }
         }
         
-        // Prepare product data
+        // Check if inventory tracking is enabled
+        $trackInventory = isset($data['track_inventory']) ? (bool)$data['track_inventory'] : false;
+        
+        // Create the product with the correct is_storable field
         $productData = [
             'name' => $data['name'],
             'categ_id' => intval($data['category_id']),
             'list_price' => floatval($data['price']),
-            'standard_price' => floatval($data['cost'])
+            'standard_price' => floatval($data['cost']),
+            'sale_ok' => true,
+            'purchase_ok' => true,
+            'is_storable' => $trackInventory  // This is the key field we need to set!
         ];
-        
-        error_log("Product data prepared: " . print_r($productData, true));
         
         // Add optional fields
         if (isset($data['description']) && !empty($data['description'])) {
@@ -224,53 +228,59 @@ function handleCreateProduct($odoo) {
         
         error_log("Creating product in Odoo with data: " . print_r($productData, true));
         
-        // Create product
-        $productId = $odoo->create('product.product', $productData);
+        // Create product template
+        $templateId = $odoo->create('product.template', $productData);
         
-        if ($productId === false) {
-            error_log("Failed to create product: " . $odoo->getLastError());
+        if ($templateId === false) {
+            error_log("Failed to create product template: " . $odoo->getLastError());
             sendError('Failed to create product: ' . $odoo->getLastError());
             return;
         }
         
-        error_log("Product created successfully with ID: $productId");
+        error_log("Product template created successfully with ID: $templateId");
         
-        // Handle initial stock if provided
-        if (isset($data['initial_stock']) && floatval($data['initial_stock']) > 0) {
-            error_log("Setting initial stock: " . $data['initial_stock']);
+        // Find the product variant that was created
+        $productIds = $odoo->search('product.product', [['product_tmpl_id', '=', $templateId]]);
+        
+        if ($productIds === false || empty($productIds)) {
+            error_log("Failed to find product variant: " . $odoo->getLastError());
+            sendError('Product template created but failed to find product variant');
+            return;
+        }
+        
+        $productId = $productIds[0];
+        error_log("Found product variant with ID: $productId");
+        
+        // Handle initial stock if provided and tracking is enabled
+        if ($trackInventory && isset($data['initial_stock']) && floatval($data['initial_stock']) > 0) {
+            $initialStock = floatval($data['initial_stock']);
+            error_log("Setting initial stock: " . $initialStock);
             
-            // Create a simple stock adjustment for demo purposes
             try {
-                // Use stock.quant to set initial stock
-                $stockData = [
-                    'product_id' => $productId,
-                    'inventory_quantity' => floatval($data['initial_stock']),
-                    'location_id' => 1 // Default stock location
-                ];
-                
-                error_log("Creating stock adjustment with data: " . print_r($stockData, true));
-                
-                $stockId = $odoo->create('stock.quant', $stockData);
-                
-                if ($stockId === false) {
-                    error_log("Failed to create stock quant: " . $odoo->getLastError());
-                    // Product was created but setting initial stock failed
-                    sendResponse(true, [
-                        'product_id' => $productId,
-                        'warning' => 'Product created, but setting initial stock failed: ' . $odoo->getLastError()
-                    ], 'Product created successfully, but initial stock could not be set');
-                    return;
+                // Find the warehouse
+                $warehouseIds = $odoo->search('stock.warehouse', [], 0, 1);
+                if ($warehouseIds !== false && !empty($warehouseIds)) {
+                    $warehouseId = $warehouseIds[0];
+                    
+                    // Find the stock location for this warehouse
+                    $warehouse = $odoo->read('stock.warehouse', [$warehouseId], ['lot_stock_id']);
+                    if ($warehouse !== false && !empty($warehouse) && isset($warehouse[0]['lot_stock_id']) && is_array($warehouse[0]['lot_stock_id'])) {
+                        $locationId = $warehouse[0]['lot_stock_id'][0];
+                        
+                        // Create new stock quant
+                        $stockData = [
+                            'product_id' => $productId,
+                            'location_id' => $locationId,
+                            'inventory_quantity' => $initialStock,
+                            'quantity' => $initialStock
+                        ];
+                        
+                        $quantId = $odoo->create('stock.quant', $stockData);
+                        error_log("Creating stock quant result: " . ($quantId !== false ? "Success with ID $quantId" : "Failed: " . $odoo->getLastError()));
+                    }
                 }
-                
-                error_log("Stock quant created successfully with ID: $stockId");
             } catch (Exception $e) {
                 error_log("Exception setting initial stock: " . $e->getMessage());
-                // Continue even if stock setting fails
-                sendResponse(true, [
-                    'product_id' => $productId,
-                    'warning' => 'Product created, but setting initial stock failed: ' . $e->getMessage()
-                ], 'Product created successfully, but initial stock could not be set');
-                return;
             }
         }
         
@@ -364,16 +374,51 @@ function handleDeleteProduct($odoo) {
         
         $productId = intval($_GET['id']);
         
-        // Delete product
+        try {
+            // First try to get the product template ID
+            $product = $odoo->read('product.product', [$productId], ['product_tmpl_id']);
+            
+            if ($product !== false && !empty($product) && isset($product[0]['product_tmpl_id']) && is_array($product[0]['product_tmpl_id'])) {
+                $templateId = $product[0]['product_tmpl_id'][0];
+                
+                // Try to archive the product instead of deleting it
+                // This is safer and avoids the constraints errors
+                $archiveResult = $odoo->write('product.template', [$templateId], ['active' => false]);
+                
+                if ($archiveResult) {
+                    sendResponse(true, null, 'Product archived successfully');
+                    return;
+                }
+            }
+        } catch (Exception $e) {
+            error_log("Exception trying to archive product: " . $e->getMessage());
+            // Continue to deletion attempt
+        }
+        
+        // If archiving failed, try regular deletion
         $result = $odoo->unlink('product.product', [$productId]);
         
         if ($result === false) {
+            error_log("Failed to delete product: " . $odoo->getLastError());
+            
+            // If deletion fails, try to archive the product as a fallback
+            try {
+                $archiveResult = $odoo->write('product.product', [$productId], ['active' => false]);
+                if ($archiveResult) {
+                    sendResponse(true, null, 'Product archived successfully');
+                    return;
+                }
+            } catch (Exception $e) {
+                error_log("Exception in fallback archive: " . $e->getMessage());
+            }
+            
             sendError('Failed to delete product: ' . $odoo->getLastError());
             return;
         }
         
         sendResponse(true, null, 'Product deleted successfully');
     } catch (Exception $e) {
+        error_log("Exception in product deletion: " . $e->getMessage());
         sendError('Error deleting product: ' . $e->getMessage());
     }
 }
